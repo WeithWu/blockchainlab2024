@@ -86,8 +86,44 @@ func (bc *Blockchain) VerifyTransaction(tx *Transaction) bool {
 // implement
 // MineBlock mines a new block with the provided transactions
 func (bc *Blockchain) MineBlock(transactions []*Transaction) *Block {
+	var lastHash [32]byte
 
-	return nil
+	err := bc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		lastHashBytes := b.Get([]byte("l"))
+		if lastHashBytes == nil {
+			return fmt.Errorf("No existing blocks")
+		}
+		copy(lastHash[:], lastHashBytes)
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	newBlock := NewBlock(transactions, lastHash)
+
+	err = bc.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		err := b.Put(newBlock.CalCulHash(), newBlock.Serialize())
+		if err != nil {
+			log.Panic(err)
+		}
+
+		err = b.Put([]byte("l"), newBlock.CalCulHash())
+		if err != nil {
+			log.Panic(err)
+		}
+
+		bc.tip = newBlock.CalCulHash()
+
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return newBlock
 }
 
 // Iterator ...
@@ -203,8 +239,43 @@ func NewBlockchain() *Blockchain {
 }
 
 func (bc *Blockchain) FindUTXO() map[string]TXOutputs {
+	UTXO := make(map[string]TXOutputs)
+	spentTXOs := make(map[string][]int)
+	bci := bc.Iterator()
 
-	return nil
+	for {
+		block := bci.Next()
+
+		for _, tx := range block.GetTransactions() {
+			txID := hex.EncodeToString(tx.ID)
+
+			for outIdx, out := range tx.Vout {
+				if spentTXOs[txID] != nil {
+					for _, spentOut := range spentTXOs[txID] {
+						if spentOut == outIdx {
+							continue
+						}
+					}
+				}
+				outs := UTXO[txID]
+				outs.Outputs = append(outs.Outputs, out)
+				UTXO[txID] = outs
+			}
+
+			if tx.IsCoinBase() == false {
+				for _, in := range tx.Vin {
+					inTxID := hex.EncodeToString(in.Txid)
+					spentTXOs[inTxID] = append(spentTXOs[inTxID], in.Vout)
+				}
+			}
+		}
+
+		if block.Header.PrevBlockHash == [32]byte{} {
+			break
+		}
+	}
+
+	return UTXO
 }
 
 func (bc *Blockchain) Close() error {

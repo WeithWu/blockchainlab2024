@@ -33,7 +33,56 @@ func NewCoinbaseTx(toAddr []byte, data []byte) *Transaction {
 
 // NewUTXOTransaction creates a new transaction
 func NewUTXOTransaction(from, to []byte, amount int, UTXOSet *UTXOSet) *Transaction {
-	return nil
+	wallets, err := NewWallets()
+	if err != nil {
+		log.Panic(err)
+	}
+
+	// 获取发送方钱包
+	fromWallet := wallets.GetWallet(from)
+	fromPubKeyHash := HashPublicKey(fromWallet.PublicKey)
+
+	// 查询发送方的未花费输出
+	acc, validOutputs := UTXOSet.FindUnspentOutputs(fromPubKeyHash, amount)
+
+	// 如果余额不足，退出
+	if acc < amount {
+		log.Panic("ERROR: Not enough funds")
+	}
+
+	var inputs []TXInput
+	var outputs []TXOutput
+
+	// 构建交易输入
+	for txid, outs := range validOutputs {
+		txID, err := hex.DecodeString(txid)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		for _, out := range outs {
+			input := TXInput{Txid: txID, Vout: out, Signature: nil, PubKey: fromWallet.PublicKey}
+			inputs = append(inputs, input)
+		}
+	}
+
+	// 构建交易输出
+	outputs = append(outputs, *NewTXOutput(amount, to))
+	if acc > amount {
+		// 构建找零输出
+		outputs = append(outputs, *NewTXOutput(acc-amount, from))
+	}
+
+	tx := Transaction{Vin: inputs, Vout: outputs}
+
+	// 设置交易ID
+	tx.SetID()
+
+	// 使用发送方的私钥签名交易
+	UTXOSet.Blockchain.SignTransaction(&tx, fromWallet.PrivateKey)
+
+	return &tx
+
 }
 
 func (t *Transaction) IsCoinBase() bool {

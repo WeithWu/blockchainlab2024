@@ -118,3 +118,16 @@ func DeserializeBlock(d []byte) *Block {
 
 	return &block
 }
+
+func (b *Block) HashTransactions() []byte {
+	var txHashes [][]byte
+	var txHash [32]byte
+
+	for _, tx := range b.Body.Transactions {
+		txHashes = append(txHashes, tx.Hash())
+	}
+
+	txHash = sha256.Sum256(bytes.Join(txHashes, []byte{}))
+
+	return txHash[:]
+}
